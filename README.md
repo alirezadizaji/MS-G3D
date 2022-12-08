@@ -1,4 +1,4 @@
-# MS-G3D
+# MS-G3D (Forked)
 
 PyTorch implementation of "Disentangling and Unifying Graph Convolutions for Skeleton-Based Action Recognition", CVPR 2020 Oral.
 
