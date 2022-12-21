@@ -110,3 +110,9 @@ venv.bak/
 
 # ignore .skeleton files
 *.skeleton
+
+#ignore pickle files
+*.pkl
+
+#ignore checkpoint files
+*.pt

@@ -1,4 +1,5 @@
 import sys
+
 sys.path.extend(['../'])
 
 import torch
@@ -6,6 +7,8 @@ import pickle
 import numpy as np
 from torch.utils.data import Dataset
 
+from data_gen.ntu_gendata import read_xyz
+from data_gen.preprocess import pre_normalization
 from feeders import tools
 
 
@@ -113,18 +116,20 @@ def test(data_path, label_path, vid=None, graph=None, is_3d=False):
     :return:
     '''
     import matplotlib.pyplot as plt
-    loader = torch.utils.data.DataLoader(
-        dataset=Feeder(data_path, label_path),
-        batch_size=64,
-        shuffle=False,
-        num_workers=2)
+    # loader = torch.utils.data.DataLoader(
+    #     dataset=Feeder(data_path, label_path),
+    #     batch_size=64,
+    #     shuffle=False,
+    #     num_workers=2)
 
     if vid is not None:
-        sample_name = loader.dataset.sample_name
-        sample_id = [name.split('.')[0] for name in sample_name]
-        index = sample_id.index(vid)
-        data, label, index = loader.dataset[index]
-        data = data.reshape((1,) + data.shape)
+        # sample_name = loader.dataset.sample_name
+        # sample_id = [name.split('.')[0] for name in sample_name]
+        # index = sample_id.index(vid)
+        # data, label, index = loader.dataset[index]
+        data = read_xyz('/home/alireza/Desktop/TUM/MICCAI/Skeleton/Code/MS-G3D/data/nturgbd_raw/nturgb+d_skeletons/S001C003P001R001A001.skeleton')
+        data = data[None, ...]
+        data = pre_normalization(data)
 
         # for batch_idx, (data, label) in enumerate(loader):
         N, C, T, V, M = data.shape
@@ -186,11 +191,11 @@ def test(data_path, label_path, vid=None, graph=None, is_3d=False):
 
 if __name__ == '__main__':
     import os
-    os.environ['DISPLAY'] = 'localhost:10.0'
+    # os.environ['DISPLAY'] = 'localhost:8000'
     data_path = "../data/ntu/xview/val_data_joint.npy"
     label_path = "../data/ntu/xview/val_label.pkl"
     graph = 'graph.ntu_rgb_d.Graph'
-    test(data_path, label_path, vid='S004C001P003R001A032', graph=graph, is_3d=True)
+    test(data_path, label_path, vid='S001C001P001R001A009', graph=graph, is_3d=True)
     # data_path = "../data/kinetics/val_data.npy"
     # label_path = "../data/kinetics/val_label.pkl"
     # graph = 'graph.Kinetics'
