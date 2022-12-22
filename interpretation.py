@@ -2,12 +2,18 @@ import os
 from tqdm import tqdm
 from typing import List
 
+import matplotlib as mpl
+import matplotlib.cm as cm
+import matplotlib.pyplot as plt
+from matplotlib.animation import FuncAnimation
+import matplotlib.animation as animation
 from dig.xgraph.method.gradcam import GraphLayerGradCam
 from dig.xgraph.models.utils import normalize
 import torch
 import yaml
 
 from main import Processor, init_seed, get_parser
+from ntu_visualize import ntu_skeleton_bone_pairs as bones, actions
 
 class InterpretationProcessor(Processor):
     def __init__(self, arg):
@@ -22,9 +28,12 @@ class InterpretationProcessor(Processor):
                 index = l.split(",")[0].replace("tensor(", "").replace(")", "")
                 self._indices_to_be_interpreted.append(int(index))
 
+        self.upsample = torch.nn.Upsample(scale_factor=(1, 4, 1, 1), mode='nearest')
+
     def _get_node_weight(self, x, ex_label):
         attr = self.explain_method.attribute(x, ex_label).detach()
         node_weight = normalize(attr.relu())
+        node_weight = node_weight.squeeze(1)
         return node_weight
 
     def interpret(self, loader_name='test'):
@@ -36,8 +45,8 @@ class InterpretationProcessor(Processor):
             for start in tqdm(range(0, l, self.arg.test_batch_size)):
                 end = start + self.arg.test_batch_size
                 data, label, _ = self.data_loader[loader_name].dataset.__getitem__(self._indices_to_be_interpreted[start:end])
+                names = self.data_loader[loader_name].dataset.sample_name[self._indices_to_be_interpreted[start:end]]
                 data = torch.tensor(data)
-                N, _, _, _, M = data.size()
                 label = torch.tensor(label)
                 data = data.float().cuda(self.output_device)
                 label = label.long().cuda(self.output_device)
@@ -49,12 +58,66 @@ class InterpretationProcessor(Processor):
                 del output
 
                 # get interpretation weights
-                node_weight = self._get_node_weight(data, y_pred)
-                node_weight_per_body = node_weight.chunk(M)
-                node_weight = torch.stack(node_weight_per_body, dim=-1)
+                N, _, _, _, M = data.size()
+                nodes_weight = self._get_node_weight(data, y_pred)
+                nodes_weight_per_body = nodes_weight.chunk(M)
+                nodes_weight  = torch.stack(nodes_weight_per_body, dim=-1) # N T/4 V M
+                nodes_weight = self.upsample(nodes_weight) # N T V M
 
+                # Visualize samples
+                self.visualize_samples(data, names, label, y_pred, nodes_weight)
+                
         # Empty cache after evaluation
         torch.cuda.empty_cache()
+
+    def visualize_samples(self, data, names, labels, preds, node_weights):
+        def animate(skeleton):
+            ax.clear()
+            ax.set_xlim([-1,1])
+            ax.set_ylim([-1,1])
+            ax.set_zlim([-1,1])
+            for i, j in bones:
+                joint_locs = skeleton[:,[i,j]]
+                weight = (node_weight1[index, i] + node_weight1[index, j]) / 2
+                color = cm.hot(weight)
+                # plot them
+                ax.plot(joint_locs[0],joint_locs[1],joint_locs[2], color=color)
+
+            action_class = labels[1][index] + 1
+            action_name = actions[action_class]
+            plt.title('Skeleton {} Frame #{} of 300\n (Action {}: {}, Predicted: {})'.format(index, skeleton_index[0], action_class, action_name, predicted_name))
+            skeleton_index[0] += 1
+            return ax
+
+        for index, (skeletons, name, action_class, pred, node_weight) in \
+                    enumerate(zip(data, names, labels, preds, node_weights)):
+            mpl.rcParams['legend.fontsize'] = 10
+            fig = plt.figure()
+            ax = fig.gca(projection='3d')
+            ax.set_xlim([-1,1])
+            ax.set_ylim([-1,1])
+            ax.set_zlim([-1,1])
+
+            # get data
+            action_name = actions[action_class]
+            predicted_name = actions[pred]
+            print(f'Sample name: {name}\nAction: {action_name}, Predicted: {predicted_name}\n')   # (C,T,V,M)
+
+            # Pick the first body to visualize
+            skeleton1 = skeletons[..., 0]   # out (C,T,V)
+            node_weight1 = node_weight[..., 0] # out (T,V)
+
+
+            skeleton_index = [0]
+            skeleton_frames = skeleton1.transpose(1,0,2)
+            ani = FuncAnimation(fig, animate, skeleton_frames)
+            
+            # saving to m4 using ffmpeg writer
+            writervideo = animation.FFMpegWriter(fps=60)
+            save_dir = os.path.join(self.arg.work_dir, 'interpretation', action_class)
+            os.makedirs(save_dir, exist_ok=True)
+            ani.save(os.path.join(save_dir, f'{name}.mp4'), writer=writervideo)
+            plt.close()
 
 
 def main():
