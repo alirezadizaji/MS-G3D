@@ -7,8 +7,6 @@ import pickle
 import numpy as np
 from torch.utils.data import Dataset
 
-from data_gen.ntu_gendata import read_xyz
-from data_gen.preprocess import pre_normalization
 from feeders import tools
 
 
@@ -60,6 +58,7 @@ class Feeder(Dataset):
             self.label = self.label[0:100]
             self.data = self.data[0:100]
             self.sample_name = self.sample_name[0:100]
+        self.label = np.array(self.label)
 
     def get_mean_map(self):
         data = self.data
@@ -116,20 +115,18 @@ def test(data_path, label_path, vid=None, graph=None, is_3d=False):
     :return:
     '''
     import matplotlib.pyplot as plt
-    # loader = torch.utils.data.DataLoader(
-    #     dataset=Feeder(data_path, label_path),
-    #     batch_size=64,
-    #     shuffle=False,
-    #     num_workers=2)
+    loader = torch.utils.data.DataLoader(
+        dataset=Feeder(data_path, label_path),
+        batch_size=64,
+        shuffle=False,
+        num_workers=2)
 
     if vid is not None:
-        # sample_name = loader.dataset.sample_name
-        # sample_id = [name.split('.')[0] for name in sample_name]
-        # index = sample_id.index(vid)
-        # data, label, index = loader.dataset[index]
-        data = read_xyz('/home/alireza/Desktop/TUM/MICCAI/Skeleton/Code/MS-G3D/data/nturgbd_raw/nturgb+d_skeletons/S001C003P001R001A001.skeleton')
-        data = data[None, ...]
-        data = pre_normalization(data)
+        sample_name = loader.dataset.sample_name
+        sample_id = [name.split('.')[0] for name in sample_name]
+        index = sample_id.index(vid)
+        data, label, index = loader.dataset[index]
+        data = data.reshape((1,) + data.shape)
 
         # for batch_idx, (data, label) in enumerate(loader):
         N, C, T, V, M = data.shape

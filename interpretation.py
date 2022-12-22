@@ -1,43 +1,57 @@
+import os
 from tqdm import tqdm
-from typing import Generic, List, Type, TypeVar
+from typing import List
 
-from dig.xgraph.method import *
-import numpy as np
+from dig.xgraph.method.gradcam import GraphLayerGradCam
+from dig.xgraph.models.utils import normalize
 import torch
 import yaml
 
-from .main import Processor, init_seed, get_parser
+from main import Processor, init_seed, get_parser
 
-T = TypeVar('T')
-class InterpretationProcessor(Processor, Generic[T]):
+class InterpretationProcessor(Processor):
     def __init__(self, arg):
         super().__init__(arg)
 
-        self._xmethod: T = T(self.model, explain_graph=True)
-    
-    def interpret(self, loader_name=['test']):
+        self.explain_method = GraphLayerGradCam(self.model, self.model.tcn3)
+        
+        self._indices_to_be_interpreted: List[int] = list()
+        with open(os.path.join(self.arg.work_dir, "wrong-samples.txt"), "r") as f:
+            lines = f.read().split("\n")
+            for l in lines:
+                index = l.split(",")[0].replace("tensor(", "").replace(")", "")
+                self._indices_to_be_interpreted.append(int(index))
+
+    def _get_node_weight(self, x, ex_label):
+        attr = self.explain_method.attribute(x, ex_label).detach()
+        node_weight = normalize(attr.relu())
+        return node_weight
+
+    def interpret(self, loader_name='test'):
         with torch.no_grad():
             self.model = self.model.cuda(self.output_device)
             self.model.eval()
-            for ln in loader_name:
 
-                process = tqdm(self.data_loader[ln], dynamic_ncols=True)
-                for batch_idx, (data, label, index) in enumerate(process):
-                    data = data.float().cuda(self.output_device)
-                    label = label.long().cuda(self.output_device)
-                    
-                    out_x = self._xmethod(data.x, data.edge_index,
-                        sparsity=0.0,
-                        num_classes=60)
-                    edge_masks = out_x[0]
-                    output = self.model(data)
-                    if isinstance(output, tuple):
-                        output, l1 = output
-                        l1 = l1.mean()
-                    else:
-                        l1 = 0
-                    y_pred = output.argmax(-1)
-                    edge_mask = edge_masks[y_pred.item()].data
+            l = len(self._indices_to_be_interpreted)
+            for start in tqdm(range(0, l, self.arg.test_batch_size)):
+                end = start + self.arg.test_batch_size
+                data, label, _ = self.data_loader[loader_name].dataset.__getitem__(self._indices_to_be_interpreted[start:end])
+                data = torch.tensor(data)
+                N, _, _, _, M = data.size()
+                label = torch.tensor(label)
+                data = data.float().cuda(self.output_device)
+                label = label.long().cuda(self.output_device)
+                
+                # get prediction of the model
+                output = self.model(data)
+                y_pred = output.argmax(-1)
+                
+                del output
+
+                # get interpretation weights
+                node_weight = self._get_node_weight(data, y_pred)
+                node_weight_per_body = node_weight.chunk(M)
+                node_weight = torch.stack(node_weight_per_body, dim=-1)
 
         # Empty cache after evaluation
         torch.cuda.empty_cache()
@@ -50,7 +64,7 @@ def main():
     p = parser.parse_args()
     if p.config is not None:
         with open(p.config, 'r') as f:
-            default_arg = yaml.load(f)
+            default_arg = yaml.safe_load(f)
         key = vars(p).keys()
         for k in default_arg.keys():
             if k not in key:
@@ -60,7 +74,8 @@ def main():
 
     arg = parser.parse_args()
     init_seed(arg.seed)
-    processor = InterpretationProcessor[GradCAM](arg)
+
+    processor = InterpretationProcessor(arg)
     processor.interpret()
 
 
