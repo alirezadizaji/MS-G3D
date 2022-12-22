@@ -90,6 +90,10 @@ class InterpretationProcessor(Processor):
 
         for index, (skeletons, name, action_class, pred, node_weight) in \
                     enumerate(zip(data, names, labels, preds, node_weights)):
+            
+            action_class += 1
+            pred += 1
+            
             mpl.rcParams['legend.fontsize'] = 10
             fig = plt.figure()
             ax = fig.gca(projection='3d')
@@ -118,6 +122,8 @@ class InterpretationProcessor(Processor):
             os.makedirs(save_dir, exist_ok=True)
             ani.save(os.path.join(save_dir, f'{name}.mp4'), writer=writervideo)
             plt.close()
+
+            print(f"@@@\nVisualization done for {name}\n@@@", flush=True)
 
 
 def main():
