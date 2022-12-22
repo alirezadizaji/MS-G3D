@@ -28,12 +28,11 @@ class InterpretationProcessor(Processor):
                 index = l.split(",")[0].replace("tensor(", "").replace(")", "")
                 self._indices_to_be_interpreted.append(int(index))
 
-        self.upsample = torch.nn.Upsample(scale_factor=(1, 4, 1, 1), mode='nearest')
+        self.upsample = torch.nn.Upsample(scale_factor=(4, 1, 1), mode='nearest')
 
     def _get_node_weight(self, x, ex_label):
         attr = self.explain_method.attribute(x, ex_label).detach()
         node_weight = normalize(attr.relu())
-        node_weight = node_weight.squeeze(1)
         return node_weight
 
     def interpret(self, loader_name='test'):
@@ -45,7 +44,7 @@ class InterpretationProcessor(Processor):
             for start in tqdm(range(0, l, self.arg.test_batch_size)):
                 end = start + self.arg.test_batch_size
                 data, label, _ = self.data_loader[loader_name].dataset.__getitem__(self._indices_to_be_interpreted[start:end])
-                names = self.data_loader[loader_name].dataset.sample_name[self._indices_to_be_interpreted[start:end]]
+                names = [self.data_loader[loader_name].dataset.sample_name[i] for i in self._indices_to_be_interpreted[start:end]]
                 data = torch.tensor(data)
                 label = torch.tensor(label)
                 data = data.float().cuda(self.output_device)
@@ -61,12 +60,12 @@ class InterpretationProcessor(Processor):
                 N, _, _, _, M = data.size()
                 nodes_weight = self._get_node_weight(data, y_pred)
                 nodes_weight_per_body = nodes_weight.chunk(M)
-                nodes_weight  = torch.stack(nodes_weight_per_body, dim=-1) # N T/4 V M
-                nodes_weight = self.upsample(nodes_weight) # N T V M
+                nodes_weight  = torch.stack(nodes_weight_per_body, dim=-1) # N 1 T/4 V M
+                nodes_weight = self.upsample(nodes_weight).squeeze(1) # N T V M
 
                 # Visualize samples
-                self.visualize_samples(data, names, label, y_pred, nodes_weight)
-                
+                self.visualize_samples(data.cpu().numpy(), names, label, y_pred, nodes_weight.cpu().numpy())
+
         # Empty cache after evaluation
         torch.cuda.empty_cache()
 
@@ -83,8 +82,8 @@ class InterpretationProcessor(Processor):
                 # plot them
                 ax.plot(joint_locs[0],joint_locs[1],joint_locs[2], color=color)
 
-            action_class = labels[1][index] + 1
-            action_name = actions[action_class]
+            action_class = labels[index] + 1
+            action_name = actions[action_class.item()]
             plt.title('Skeleton {} Frame #{} of 300\n (Action {}: {}, Predicted: {})'.format(index, skeleton_index[0], action_class, action_name, predicted_name))
             skeleton_index[0] += 1
             return ax
@@ -99,8 +98,9 @@ class InterpretationProcessor(Processor):
             ax.set_zlim([-1,1])
 
             # get data
-            action_name = actions[action_class]
-            predicted_name = actions[pred]
+
+            action_name = actions[action_class.item()]
+            predicted_name = actions[pred.item()]
             print(f'Sample name: {name}\nAction: {action_name}, Predicted: {predicted_name}\n')   # (C,T,V,M)
 
             # Pick the first body to visualize
@@ -114,7 +114,7 @@ class InterpretationProcessor(Processor):
             
             # saving to m4 using ffmpeg writer
             writervideo = animation.FFMpegWriter(fps=60)
-            save_dir = os.path.join(self.arg.work_dir, 'interpretation', action_class)
+            save_dir = os.path.join(self.arg.work_dir, 'interpretation', action_name)
             os.makedirs(save_dir, exist_ok=True)
             ani.save(os.path.join(save_dir, f'{name}.mp4'), writer=writervideo)
             plt.close()
