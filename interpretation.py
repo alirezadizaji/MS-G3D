@@ -8,12 +8,14 @@ import matplotlib.pyplot as plt
 from matplotlib.animation import FuncAnimation
 import matplotlib.animation as animation
 from dig.xgraph.method.gradcam import GraphLayerGradCam
-from dig.xgraph.models.utils import normalize
 import torch
 import yaml
 
 from main import Processor, init_seed, get_parser
 from ntu_visualize import ntu_skeleton_bone_pairs as bones, actions
+
+def rgb_to_hex(r, g, b):
+  return '#%02x%02x%02x' % (r, g, b)
 
 class InterpretationProcessor(Processor):
     def __init__(self, arg):
@@ -31,9 +33,11 @@ class InterpretationProcessor(Processor):
         self.upsample = torch.nn.Upsample(scale_factor=(4, 1, 1), mode='nearest')
 
     def _get_node_weight(self, x, ex_label):
-        attr = self.explain_method.attribute(x, ex_label).detach()
-        node_weight = normalize(attr.relu())
-        return node_weight
+        attr = self.explain_method.attribute(x, ex_label).detach().relu()
+        attr -= attr.amin(dim=(1, 2, 3), keepdim=True)
+        attr /= attr.amax(dim=(1, 2, 3), keepdim=True)
+
+        return attr
 
     def interpret(self, loader_name='test'):
         with torch.no_grad():
@@ -58,11 +62,11 @@ class InterpretationProcessor(Processor):
 
                 # get interpretation weights
                 N, _, _, _, M = data.size()
-                nodes_weight = self._get_node_weight(data, y_pred)
+                nodes_weight = self._get_node_weight(data, y_pred)                
                 nodes_weight_per_body = nodes_weight.chunk(M)
                 nodes_weight  = torch.stack(nodes_weight_per_body, dim=-1) # N 1 T/4 V M
                 nodes_weight = self.upsample(nodes_weight).squeeze(1) # N T V M
-
+                
                 # Visualize samples
                 self.visualize_samples(data.cpu().numpy(), names, label, y_pred, nodes_weight.cpu().numpy())
 
@@ -70,22 +74,30 @@ class InterpretationProcessor(Processor):
         torch.cuda.empty_cache()
 
     def visualize_samples(self, data, names, labels, preds, node_weights):
+        
+        norm = mpl.colors.Normalize(vmin=0, vmax=1, clip=True)
+        mapper = cm.ScalarMappable(norm=norm, cmap='viridis')
+        
         def animate(skeleton):
+            frame_index = skeleton_index[0]
             ax.clear()
             ax.set_xlim([-1,1])
             ax.set_ylim([-1,1])
             ax.set_zlim([-1,1])
+
             for i, j in bones:
                 joint_locs = skeleton[:,[i,j]]
-                weight = (node_weight1[index, i] + node_weight1[index, j]) / 2
-                color = cm.hot(weight)
+                weight = (node_weight1[frame_index, i] + node_weight1[frame_index, j]) / 2
+                r, g, b, _ = mapper.to_rgba(weight)
+                color = rgb_to_hex(int(r * 255), int(g * 255), int(b * 255))
+                
                 # plot them
                 ax.plot(joint_locs[0],joint_locs[1],joint_locs[2], color=color)
-
-            action_class = labels[index] + 1
-            action_name = actions[action_class.item()]
-            plt.title('Skeleton {} Frame #{} of 300\n (Action {}: {}, Predicted: {})'.format(index, skeleton_index[0], action_class, action_name, predicted_name))
+            
+            plt.title('Skeleton {} Frame #{} of 300\n (Action: {}, Predicted: {})'.format(index, skeleton_index[0], action_name, predicted_name))
             skeleton_index[0] += 1
+            skeleton_index[0] = min(skeleton_index[0], node_weight1.shape[0] - 1)
+
             return ax
 
         for index, (skeletons, name, action_class, pred, node_weight) in \
@@ -110,7 +122,6 @@ class InterpretationProcessor(Processor):
             # Pick the first body to visualize
             skeleton1 = skeletons[..., 0]   # out (C,T,V)
             node_weight1 = node_weight[..., 0] # out (T,V)
-
 
             skeleton_index = [0]
             skeleton_frames = skeleton1.transpose(1,0,2)
